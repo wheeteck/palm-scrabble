@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Palm Pilot Scrabble</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #2a2a2a;
+            font-family: 'Courier New', monospace;
+        }
+        
+        #gameContainer {
+            background: #9EA89E;
+            border: 3px solid #000;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            padding: 20px;
+            border-radius: 5px;
+        }
+        
+        canvas {
+            display: block;
+            cursor: grab;
+            image-rendering: crisp-edges;
+        }
+        
+        canvas:active {
+            cursor: grabbing;
+        }
+        
+        #controls {
+            margin-top: 10px;
+            text-align: center;
+            color: #434643;
+            font-size: 14px;
+        }
+        
+        .button {
+            background: #788278;
+            border: 2px solid #434643;
+            color: white;
+            padding: 5px 15px;
+            margin: 0 5px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+        }
+        
+        .button:hover {
+            background: #434643;
+        }
+        
+        #loadingMessage {
+            color: #434643;
+            text-align: center;
+            padding: 20px;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <div id="loadingMessage">Loading Palm Scrabble...</div>
+        <canvas id="gameCanvas" width="800" height="900" style="display: none;"></canvas>
+        <div id="controls" style="display: none;">
+            <button class="button" onclick="game.toggleSound()">Sound: <span id="soundStatus">ON</span></button>
+            <button class="button" onclick="game.showHelp()">Help</button>
+            <span style="margin-left: 20px;">Score: <span id="scoreDisplay">0</span></span>
+        </div>
+    </div>
+
+    <script>
+        // Game constants
+        const BOARD_SIZE = 15;
+        const TILE_SIZE = 40;
+        const BOARD_OFFSET_X = 50;
+        const BOARD_OFFSET_Y = 50;
+        const RACK_Y = 720;
+        const RACK_X = 100;
+        
+        // Colors
+        const COLORS = {
+            PALM_BG: '#9EA89E',
+            PALM_DARK: '#434643',
+            PALM_LIGHT: '#C7CCC7',
+            PALM_HIGHLIGHT: '#788278',
+            WHITE: '#FFFFFF',
+            BLACK: '#000000',
+            RED: '#963232',
+            PINK: '#C89696',
+            BLUE: '#646496',
+            LIGHT_BLUE: '#9696C8',
+            YELLOW: '#C8C864',
+            EXIT_RED: '#C83232'
+        };
+        
+        // Letter values
+        const LETTER_VALUES = {
+            'A': 1, 'B': 3, 'C': 3, 'D': 2, 'E': 1, 'F': 4, 'G': 2, 'H': 4,
+            'I': 1, 'J': 8, 'K': 5, 'L': 1, 'M': 3, 'N': 1, 'O': 1, 'P': 3,
+            'Q': 10, 'R': 1, 'S': 1, 'T': 1, 'U': 1, 'V': 4, 'W': 4, 'X': 8,
+            'Y': 4, 'Z': 10, ' ': 0
+        };
+        
+        // Letter distribution
+        const LETTER_DISTRIBUTION = {
+            'A': 9, 'B': 2, 'C': 2, 'D': 4, 'E': 12, 'F': 2, 'G': 3, 'H': 2,
+            'I': 9, 'J': 1, 'K': 1, 'L': 4, 'M': 2, 'N': 6, 'O': 8, 'P': 2,
+            'Q': 1, 'R': 6, 'S': 4, 'T': 6, 'U': 4, 'V': 2, 'W': 2, 'X': 1,
+            'Y': 2, 'Z': 1, ' ': 2
+        };
+        
+        // Square types
+        const SquareType = {
+            NORMAL: 0,
+            DOUBLE_LETTER: 1,
+            TRIPLE_LETTER: 2,
+            DOUBLE_WORD: 3,
+            TRIPLE_WORD: 4,
+            CENTER: 5
+        };
+        
+        class SoundManager {
+            constructor() {
+                this.enabled = true;
+                this.audioContext = null;
+                this.initAudio();
+            }
+            
+            initAudio() {
+                try {
+                    window.AudioContext = window.AudioContext || window.webkitAudioContext;
+                    this.audioContext = new AudioContext();
+                } catch(e) {
+                    console.log('Web Audio not supported');
+                    this.enabled = false;
+                }
+            }
+            
+            playBeep(frequency, duration) {
+                if (!this.enabled || !this.audioContext) return;
+                
+                const oscillator = this.audioContext.createOscillator();
+                const gainNode = this.audioContext.createGain();
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(this.audioContext.destination);
+                
+                oscillator.frequency.value = frequency;
+                oscillator.type = 'sine';
+                
+                gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + duration);
+                
+                oscillator.start(this.audioContext.currentTime);
+                oscillator.stop(this.audioContext.currentTime + duration);
+            }
+            
+            play(soundType) {
+                if (!this.enabled) return;
+                
+                switch(soundType) {
+                    case 'pickup':
+                        this.playBeep(440, 0.1);
+                        break;
+                    case 'place':
+                        this.playBeep(330, 0.1);
+                        break;
+                    case 'click':
+                        this.playBeep(220, 0.1);
+                        break;
+                    case 'end_turn':
+                        this.playBeep(440, 0.1);
+                        setTimeout(() => this.playBeep(550, 0.1), 100);
+                        break;
+                    case 'error':
+                        this.playBeep(110, 0.2);
+                        break;
+                }
+            }
+            
+            toggle() {
+                this.enabled = !this.enabled;
+                if (this.enabled && !this.audioContext) {
+                    this.initAudio();
+                }
+                return this.enabled;
+            }
+        }
+        
+        class Tile {
+            constructor(letter, value) {
+                this.letter = letter;
+                this.value = value;
+                this.x = 0;
+                this.y = 0;
+                this.isDragging = false;
+                this.isPermanent = false;
+                this.boardPos = null;
+            }
+            
+            contains(x, y) {
+                return x >= this.x && x <= this.x + TILE_SIZE &&
+                       y >= this.y && y <= this.y + TILE_SIZE;
+            }
+        }
+        
+        class Board {
+            constructor() {
+                this.grid = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null));
+                this.squareTypes = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(SquareType.NORMAL));
+                this.tempTiles = [];
+                this.setupSpecialSquares();
+            }
+            
+            setupSpecialSquares() {
+                // Triple word squares
+                const tripleWord = [[0,0], [0,7], [0,14], [7,0], [7,14], [14,0], [14,7], [14,14]];
+                tripleWord.forEach(([x, y]) => this.squareTypes[y][x] = SquareType.TRIPLE_WORD);
+                
+                // Double word squares
+                const doubleWord = [[1,1], [2,2], [3,3], [4,4], [13,1], [12,2], [11,3], [10,4],
+                                  [1,13], [2,12], [3,11], [4,10], [13,13], [12,12], [11,11], [10,10]];
+                doubleWord.forEach(([x, y]) => this.squareTypes[y][x] = SquareType.DOUBLE_WORD);
+                
+                // Triple letter squares
+                const tripleLetter = [[1,5], [1,9], [5,1], [5,5], [5,9], [5,13],
+                                    [9,1], [9,5], [9,9], [9,13], [13,5], [13,9]];
+                tripleLetter.forEach(([x, y]) => this.squareTypes[y][x] = SquareType.TRIPLE_LETTER);
+                
+                // Double letter squares
+                const doubleLetter = [[0,3], [0,11], [2,6], [2,8], [3,0], [3,7], [3,14],
+                                    [6,2], [6,6], [6,8], [6,12], [7,3], [7,11],
+                                    [8,2], [8,6], [8,8], [8,12], [11,0], [11,7], [11,14],
+                                    [12,6], [12,8], [14,3], [14,11]];
+                doubleLetter.forEach(([x, y]) => this.squareTypes[y][x] = SquareType.DOUBLE_LETTER);
+                
+                // Center square
+                this.squareTypes[7][7] = SquareType.CENTER;
+            }
+            
+            placeTile(tile, col, row) {
+                if (this.grid[row][col] === null) {
+                    this.grid[row][col] = tile;
+                    tile.boardPos = {col, row};
+                    if (!tile.isPermanent) {
+                        this.tempTiles.push(tile);
+                    }
+                    return true;
+                }
+                return false;
+            }
+            
+            removeTile(col, row) {
+                const tile = this.grid[row][col];
+                if (tile && !tile.isPermanent) {
+                    this.grid[row][col] = null;
+                    tile.boardPos = null;
+                    const index = this.tempTiles.indexOf(tile);
+                    if (index > -1) {
+                        this.tempTiles.splice(index, 1);
+                    }
+                    return tile;
+                }
+                return null;
+            }
+            
+            draw(ctx) {
+                // Draw board background
+                ctx.fillStyle = COLORS.PALM_DARK;
+                ctx.fillRect(BOARD_OFFSET_X - 5, BOARD_OFFSET_Y - 5,
+                           BOARD_SIZE * TILE_SIZE + 10, BOARD_SIZE * TILE_SIZE + 10);
+                
+                // Draw squares
+                for (let row = 0; row < BOARD_SIZE; row++) {
+                    for (let col = 0; col < BOARD_SIZE; col++) {
+                        const x = BOARD_OFFSET_X + col * TILE_SIZE;
+                        const y = BOARD_OFFSET_Y + row * TILE_SIZE;
+                        
+                        // Set color based on square type
+                        const squareType = this.squareTypes[row][col];
+                        switch(squareType) {
+                            case SquareType.TRIPLE_WORD:
+                                ctx.fillStyle = COLORS.RED;
+                                break;
+                            case SquareType.DOUBLE_WORD:
+                                ctx.fillStyle = COLORS.PINK;
+                                break;
+                            case SquareType.TRIPLE_LETTER:
+                                ctx.fillStyle = COLORS.BLUE;
+                                break;
+                            case SquareType.DOUBLE_LETTER:
+                                ctx.fillStyle = COLORS.LIGHT_BLUE;
+                                break;
+                            case SquareType.CENTER:
+                                ctx.fillStyle = COLORS.PINK;
+                                break;
+                            default:
+                                ctx.fillStyle = COLORS.PALM_LIGHT;
+                        }
+                        
+                        ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+                        ctx.strokeStyle = COLORS.PALM_DARK;
+                        ctx.strokeRect(x, y, TILE_SIZE, TILE_SIZE);
+                        
+                        // Draw center star
+                        if (squareType === SquareType.CENTER) {
+                            ctx.fillStyle = COLORS.PALM_DARK;
+                            ctx.beginPath();
+                            ctx.arc(x + TILE_SIZE/2, y + TILE_SIZE/2, 8, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                        
+                        // Draw tile if present
+                        if (this.grid[row][col]) {
+                            this.drawTileOnBoard(ctx, this.grid[row][col], x, y);
+                        }
+                    }
+                }
+            }
+            
+            drawTileOnBoard(ctx, tile, x, y) {
+                // Draw tile background
+                ctx.fillStyle = tile.isPermanent ? COLORS.WHITE : COLORS.YELLOW;
+                ctx.fillRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+                ctx.strokeStyle = COLORS.BLACK;
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+                
+                // Draw letter
+                ctx.fillStyle = COLORS.BLACK;
+                ctx.font = 'bold 20px Courier New';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(tile.letter, x + TILE_SIZE/2, y + TILE_SIZE/2 - 2);
+                
+                // Draw value
+                if (tile.value > 0) {
+                    ctx.font = '12px Courier New';
+                    ctx.textAlign = 'right';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText(tile.value, x + TILE_SIZE - 4, y + TILE_SIZE - 2);
+                }
+            }
+        }
+        
+        class Game {
+            constructor() {
+                this.canvas = document.getElementById('gameCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.board = new Board();
+                this.tileBag = this.createTileBag();
+                this.playerRack = [];
+                this.currentTile = null;
+                this.score = 0;
+                this.soundManager = new SoundManager();
+                this.isDragging = false;
+                this.dragOffset = {x: 0, y: 0};
+                
+                this.setupEventListeners();
+                this.fillRack();
+                this.gameLoop();
+            }
+            
+            createTileBag() {
+                const bag = [];
+                for (const [letter, count] of Object.entries(LETTER_DISTRIBUTION)) {
+                    for (let i = 0; i < count; i++) {
+                        bag.push(new Tile(letter, LETTER_VALUES[letter]));
+                    }
+                }
+                // Shuffle bag
+                for (let i = bag.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [bag[i], bag[j]] = [bag[j], bag[i]];
+                }
+                return bag;
+            }
+            
+            fillRack() {
+                while (this.playerRack.length < 7 && this.tileBag.length > 0) {
+                    this.playerRack.push(this.tileBag.pop());
+                }
+                this.positionRackTiles();
+            }
+            
+            positionRackTiles() {
+                this.playerRack.forEach((tile, i) => {
+                    tile.x = RACK_X + i * (TILE_SIZE + 10);
+                    tile.y = RACK_Y;
+                });
+            }
+            
+            setupEventListeners() {
+                // Mouse events
+                this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
+                this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+                this.canvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
+                
+                // Touch events for mobile
+                this.canvas.addEventListener('touchstart', (e) => {
+                    const touch = e.touches[0];
+                    const rect = this.canvas.getBoundingClientRect();
+                    const mouseEvent = new MouseEvent('mousedown', {
+                        clientX: touch.clientX,
+                        clientY: touch.clientY
+                    });
+                    this.handleMouseDown(mouseEvent);
+                    e.preventDefault();
+                });
+                
+                this.canvas.addEventListener('touchmove', (e) => {
+                    const touch = e.touches[0];
+                    const rect = this.canvas.getBoundingClientRect();
+                    const mouseEvent = new MouseEvent('mousemove', {
+                        clientX: touch.clientX,
+                        clientY: touch.clientY
+                    });
+                    this.handleMouseMove(mouseEvent);
+                    e.preventDefault();
+                });
+                
+                this.canvas.addEventListener('touchend', (e) => {
+                    this.handleMouseUp(e);
+                    e.preventDefault();
+                });
+                
+                // Keyboard events
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === ' ') {
+                        this.recallTiles();
+                        this.soundManager.play('click');
+                    } else if (e.key === 'Enter') {
+                        this.endTurn();
+                    }
+                });
+            }
+            
+            handleMouseDown(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                // Check buttons
+                if (this.checkButton(x, y, 420, 800, 80, 30)) { // Shuffle
+                    this.shuffleRack();
+                    this.soundManager.play('click');
+                    return;
+                }
+                if (this.checkButton(x, y, 510, 800, 60, 30)) { // Pass
+                    this.endTurn();
+                    return;
+                }
+                if (this.checkButton(x, y, 330, 800, 80, 30)) { // Recall
+                    this.recallTiles();
+                    this.soundManager.play('click');
+                    return;
+                }
+                if (this.checkButton(x, y, 700, 800, 60, 30)) { // Exit
+                    if (confirm('Exit game?')) {
+                        location.reload();
+                    }
+                    return;
+                }
+                
+                // Check board tiles for removal
+                const boardX = Math.floor((x - BOARD_OFFSET_X) / TILE_SIZE);
+                const boardY = Math.floor((y - BOARD_OFFSET_Y) / TILE_SIZE);
+                
+                if (boardX >= 0 && boardX < BOARD_SIZE && boardY >= 0 && boardY < BOARD_SIZE) {
+                    const tile = this.board.removeTile(boardX, boardY);
+                    if (tile) {
+                        this.playerRack.push(tile);
+                        this.positionRackTiles();
+                        this.soundManager.play('pickup');
+                        return;
+                    }
+                }
+                
+                // Check rack tiles
+                for (const tile of this.playerRack) {
+                    if (tile.contains(x, y)) {
+                        this.currentTile = tile;
+                        tile.isDragging = true;
+                        this.isDragging = true;
+                        this.dragOffset.x = x - tile.x;
+                        this.dragOffset.y = y - tile.y;
+                        this.soundManager.play('pickup');
+                        return;
+                    }
+                }
+            }
+            
+            handleMouseMove(e) {
+                if (this.isDragging && this.currentTile) {
+                    const rect = this.canvas.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    
+                    this.currentTile.x = x - this.dragOffset.x;
+                    this.currentTile.y = y - this.dragOffset.y;
+                }
+            }
+            
+            handleMouseUp(e) {
+                if (this.isDragging && this.currentTile) {
+                    const rect = this.canvas.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    
+                    // Check if dropped on board
+                    const boardX = Math.floor((x - BOARD_OFFSET_X) / TILE_SIZE);
+                    const boardY = Math.floor((y - BOARD_OFFSET_Y) / TILE_SIZE);
+                    
+                    if (boardX >= 0 && boardX < BOARD_SIZE && boardY >= 0 && boardY < BOARD_SIZE) {
+                        if (this.board.placeTile(this.currentTile, boardX, boardY)) {
+                            // Successfully placed
+                            const index = this.playerRack.indexOf(this.currentTile);
+                            if (index > -1) {
+                                this.playerRack.splice(index, 1);
+                            }
+                            this.positionRackTiles();
+                            this.soundManager.play('place');
+                        } else {
+                            // Failed to place
+                            this.positionRackTiles();
+                            this.soundManager.play('error');
+                        }
+                    } else {
+                        // Dropped outside board
+                        this.positionRackTiles();
+                    }
+                    
+                    this.currentTile.isDragging = false;
+                    this.currentTile = null;
+                    this.isDragging = false;
+                }
+            }
+            
+            checkButton(x, y, bx, by, bw, bh) {
+                return x >= bx && x <= bx + bw && y >= by && y <= by + bh;
+            }
+            
+            shuffleRack() {
+                for (let i = this.playerRack.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [this.playerRack[i], this.playerRack[j]] = [this.playerRack[j], this.playerRack[i]];
+                }
+                this.positionRackTiles();
+            }
+            
+            recallTiles() {
+                const tilesToRecall = [...this.board.tempTiles];
+                tilesToRecall.forEach(tile => {
+                    if (tile.boardPos) {
+                        this.board.removeTile(tile.boardPos.col, tile.boardPos.row);
+                        this.playerRack.push(tile);
+                    }
+                });
+                this.positionRackTiles();
+            }
+            
+            endTurn() {
+                let turnScore = 0;
+                this.board.tempTiles.forEach(tile => {
+                    tile.isPermanent = true;
+                    turnScore += tile.value;
+                });
+                
+                if (turnScore > 0) {
+                    this.score += turnScore;
+                    document.getElementById('scoreDisplay').textContent = this.score;
+                    this.soundManager.play('end_turn');
+                } else {
+                    this.soundManager.play('click');
+                }
+                
+                this.board.tempTiles = [];
+                this.fillRack();
+            }
+            
+            toggleSound() {
+                const enabled = this.soundManager.toggle();
+                document.getElementById('soundStatus').textContent = enabled ? 'ON' : 'OFF';
+                this.soundManager.play('click');
+            }
+            
+            showHelp() {
+                alert('Palm Pilot Scrabble\n\n' +
+                      '• Drag tiles from rack to board\n' +
+                      '• Click yellow tiles to remove them\n' +
+                      '• Press SPACE to recall all tiles\n' +
+                      '• Press ENTER to end turn\n' +
+                      '• Yellow tiles = temporary\n' +
+                      '• White tiles = permanent\n\n' +
+                      'Special squares multiply scores\n' +
+                      '(not implemented yet)');
+            }
+            
+            draw() {
+                // Clear canvas
+                this.ctx.fillStyle = COLORS.PALM_BG;
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // Draw board
+                this.board.draw(this.ctx);
+                
+                // Draw rack background
+                this.ctx.fillStyle = COLORS.PALM_HIGHLIGHT;
+                this.ctx.fillRect(RACK_X - 20, RACK_Y - 10, 7 * (TILE_SIZE + 10) + 20, TILE_SIZE + 20);
+                this.ctx.strokeStyle = COLORS.PALM_DARK;
+                this.ctx.lineWidth = 2;
+                this.ctx.strokeRect(RACK_X - 20, RACK_Y - 10, 7 * (TILE_SIZE + 10) + 20, TILE_SIZE + 20);
+                
+                // Draw rack label
+                this.ctx.fillStyle = COLORS.PALM_DARK;
+                this.ctx.font = '14px Courier New';
+                this.ctx.fillText('YOUR TILES', RACK_X - 15, RACK_Y - 20);
+                
+                // Draw rack tiles
+                this.playerRack.forEach(tile => {
+                    if (!tile.isDragging) {
+                        this.drawTile(tile);
+                    }
+                });
+                
+                // Draw UI elements
+                this.drawUI();
+                
+                // Draw dragging tile on top
+                if (this.currentTile && this.currentTile.isDragging) {
+                    this.drawTile(this.currentTile);
+                }
+            }
+            
+            drawTile(tile) {
+                this.ctx.fillStyle = COLORS.WHITE;
+                this.ctx.fillRect(tile.x, tile.y, TILE_SIZE, TILE_SIZE);
+                this.ctx.strokeStyle = COLORS.BLACK;
+                this.ctx.lineWidth = 2;
+                this.ctx.strokeRect(tile.x, tile.y, TILE_SIZE, TILE_SIZE);
+                
+                // Draw letter
+                this.ctx.fillStyle = COLORS.BLACK;
+                this.ctx.font = 'bold 20px Courier New';
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(tile.letter, tile.x + TILE_SIZE/2, tile.y + TILE_SIZE/2 - 2);
+                
+                // Draw value
+                if (tile.value > 0) {
+                    this.ctx.font = '12px Courier New';
+                    this.ctx.textAlign = 'right';
+                    this.ctx.textBaseline = 'bottom';
+                    this.ctx.fillText(tile.value, tile.x + TILE_SIZE - 4, tile.y + TILE_SIZE - 2);
+                }
+            }
+            
+            drawUI() {
+                // Draw score
+                this.ctx.fillStyle = COLORS.PALM_DARK;
+                this.ctx.font = 'bold 20px Courier New';
+                this.ctx.textAlign = 'left';
+                this.ctx.fillText(`SCORE: ${this.score}`, 50, 30);
+                
+                // Draw tiles remaining
+                this.ctx.fillText(`TILES LEFT: ${this.tileBag.length}`, 250, 30);
+                
+                // Draw temp tiles count
+                this.ctx.font = '14px Courier New';
+                this.ctx.fillText(`Tiles placed this turn: ${this.board.tempTiles.length}`, 450, 30);
+                
+                // Draw instructions
+                this.ctx.fillText('Drag tiles to/from board. SPACE: recall all, ENTER: end turn', 50, 860);
+                this.ctx.fillText('Yellow tiles = temporary (this turn), White = permanent', 50, 880);
+                
+                // Draw buttons
+                this.drawButton('SHUFFLE', 420, 800, 80, 30, COLORS.PALM_HIGHLIGHT);
+                this.drawButton('PASS', 510, 800, 60, 30, COLORS.PALM_HIGHLIGHT);
+                this.drawButton('RECALL', 330, 800, 80, 30, COLORS.PALM_HIGHLIGHT);
+                this.drawButton('EXIT', 700, 800, 60, 30, COLORS.EXIT_RED);
+            }
+            
+            drawButton(text, x, y, width, height, color) {
+                this.ctx.fillStyle = color;
+                this.ctx.fillRect(x, y, width, height);
+                this.ctx.strokeStyle = COLORS.PALM_DARK;
+                this.ctx.lineWidth = 2;
+                this.ctx.strokeRect(x, y, width, height);
+                
+                this.ctx.fillStyle = color === COLORS.EXIT_RED ? COLORS.WHITE : COLORS.PALM_DARK;
+                this.ctx.font = 'bold 14px Courier New';
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(text, x + width/2, y + height/2);
+            }
+            
+            gameLoop() {
+                this.draw();
+                requestAnimationFrame(() => this.gameLoop());
+            }
+        }
+        
+        // Start game when page loads
+        let game;
+        window.addEventListener('load', () => {
+            document.getElementById('loadingMessage').style.display = 'none';
+            document.getElementById('gameCanvas').style.display = 'block';
+            document.getElementById('controls').style.display = 'block';
+            game = new Game();
+        });
+    </script>
+</body>
+</html>
