@@ -72,6 +72,7 @@
             <button class="button" onclick="game.toggleSound()">Sound: <span id="soundStatus">ON</span></button>
             <button class="button" onclick="game.showHelp()">Help</button>
             <span style="margin-left: 20px;">Score: <span id="scoreDisplay">0</span></span>
+            <span style="margin-left: 20px;">Turn Score: <span id="turnScoreDisplay">0</span></span>
         </div>
     </div>
 
@@ -97,7 +98,8 @@
             BLUE: '#646496',
             LIGHT_BLUE: '#9696C8',
             YELLOW: '#C8C864',
-            EXIT_RED: '#C83232'
+            EXIT_RED: '#C83232',
+            SELECTED: '#FFD700'
         };
         
         // Letter values
@@ -203,6 +205,8 @@
                 this.isDragging = false;
                 this.isPermanent = false;
                 this.boardPos = null;
+                this.rackIndex = null;
+                this.isSelected = false;
             }
             
             contains(x, y) {
@@ -250,7 +254,9 @@
                     this.grid[row][col] = tile;
                     tile.boardPos = {col, row};
                     if (!tile.isPermanent) {
-                        this.tempTiles.push(tile);
+                        if (!this.tempTiles.includes(tile)) {
+                            this.tempTiles.push(tile);
+                        }
                     }
                     return true;
                 }
@@ -269,6 +275,139 @@
                     return tile;
                 }
                 return null;
+            }
+            
+            calculateTurnScore() {
+                let totalScore = 0;
+                const words = this.findWords();
+                
+                words.forEach(word => {
+                    let wordScore = 0;
+                    let wordMultiplier = 1;
+                    
+                    word.tiles.forEach(({tile, col, row}) => {
+                        let letterScore = tile.value;
+                        
+                        // Only apply multipliers for newly placed tiles
+                        if (!tile.isPermanent) {
+                            const squareType = this.squareTypes[row][col];
+                            switch(squareType) {
+                                case SquareType.DOUBLE_LETTER:
+                                    letterScore *= 2;
+                                    break;
+                                case SquareType.TRIPLE_LETTER:
+                                    letterScore *= 3;
+                                    break;
+                                case SquareType.DOUBLE_WORD:
+                                case SquareType.CENTER:
+                                    wordMultiplier *= 2;
+                                    break;
+                                case SquareType.TRIPLE_WORD:
+                                    wordMultiplier *= 3;
+                                    break;
+                            }
+                        }
+                        wordScore += letterScore;
+                    });
+                    
+                    wordScore *= wordMultiplier;
+                    totalScore += wordScore;
+                });
+                
+                // If all 7 tiles used, add 50 point bonus
+                if (this.tempTiles.length === 7) {
+                    totalScore += 50;
+                }
+                
+                return totalScore;
+            }
+            
+            findWords() {
+                const words = [];
+                
+                // Find horizontal words
+                for (let row = 0; row < BOARD_SIZE; row++) {
+                    let wordStart = -1;
+                    for (let col = 0; col <= BOARD_SIZE; col++) {
+                        if (col < BOARD_SIZE && this.grid[row][col]) {
+                            if (wordStart === -1) wordStart = col;
+                        } else {
+                            if (wordStart !== -1 && col - wordStart > 1) {
+                                const wordTiles = [];
+                                let hasNewTile = false;
+                                for (let i = wordStart; i < col; i++) {
+                                    wordTiles.push({
+                                        tile: this.grid[row][i],
+                                        col: i,
+                                        row: row
+                                    });
+                                    if (!this.grid[row][i].isPermanent) hasNewTile = true;
+                                }
+                                if (hasNewTile) {
+                                    words.push({tiles: wordTiles, direction: 'horizontal'});
+                                }
+                            }
+                            wordStart = -1;
+                        }
+                    }
+                }
+                
+                // Find vertical words
+                for (let col = 0; col < BOARD_SIZE; col++) {
+                    let wordStart = -1;
+                    for (let row = 0; row <= BOARD_SIZE; row++) {
+                        if (row < BOARD_SIZE && this.grid[row][col]) {
+                            if (wordStart === -1) wordStart = row;
+                        } else {
+                            if (wordStart !== -1 && row - wordStart > 1) {
+                                const wordTiles = [];
+                                let hasNewTile = false;
+                                for (let i = wordStart; i < row; i++) {
+                                    wordTiles.push({
+                                        tile: this.grid[i][col],
+                                        col: col,
+                                        row: i
+                                    });
+                                    if (!this.grid[i][col].isPermanent) hasNewTile = true;
+                                }
+                                if (hasNewTile) {
+                                    words.push({tiles: wordTiles, direction: 'vertical'});
+                                }
+                            }
+                            wordStart = -1;
+                        }
+                    }
+                }
+                
+                // Include single tiles if they're new and form crosses
+                this.tempTiles.forEach(tile => {
+                    if (tile.boardPos) {
+                        const {col, row} = tile.boardPos;
+                        let forms_word = false;
+                        
+                        // Check if it connects horizontally
+                        if ((col > 0 && this.grid[row][col-1]) || 
+                            (col < BOARD_SIZE-1 && this.grid[row][col+1])) {
+                            forms_word = true;
+                        }
+                        
+                        // Check if it connects vertically
+                        if ((row > 0 && this.grid[row-1][col]) || 
+                            (row < BOARD_SIZE-1 && this.grid[row+1][col])) {
+                            forms_word = true;
+                        }
+                        
+                        // If single tile doesn't form any word, still count it
+                        if (!forms_word && words.length === 0) {
+                            words.push({
+                                tiles: [{tile: tile, col: col, row: row}],
+                                direction: 'single'
+                            });
+                        }
+                    }
+                });
+                
+                return words;
             }
             
             draw(ctx) {
@@ -326,6 +465,12 @@
             }
             
             drawTileOnBoard(ctx, tile, x, y) {
+                // Draw selection highlight
+                if (tile.isSelected) {
+                    ctx.fillStyle = COLORS.SELECTED;
+                    ctx.fillRect(x - 2, y - 2, TILE_SIZE + 4, TILE_SIZE + 4);
+                }
+                
                 // Draw tile background
                 ctx.fillStyle = tile.isPermanent ? COLORS.WHITE : COLORS.YELLOW;
                 ctx.fillRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
@@ -358,10 +503,13 @@
                 this.tileBag = this.createTileBag();
                 this.playerRack = [];
                 this.currentTile = null;
+                this.selectedBoardTile = null;
                 this.score = 0;
+                this.turnScore = 0;
                 this.soundManager = new SoundManager();
                 this.isDragging = false;
                 this.dragOffset = {x: 0, y: 0};
+                this.dragSource = null; // 'rack' or 'board'
                 
                 this.setupEventListeners();
                 this.fillRack();
@@ -385,7 +533,9 @@
             
             fillRack() {
                 while (this.playerRack.length < 7 && this.tileBag.length > 0) {
-                    this.playerRack.push(this.tileBag.pop());
+                    const tile = this.tileBag.pop();
+                    tile.rackIndex = this.playerRack.length;
+                    this.playerRack.push(tile);
                 }
                 this.positionRackTiles();
             }
@@ -394,6 +544,7 @@
                 this.playerRack.forEach((tile, i) => {
                     tile.x = RACK_X + i * (TILE_SIZE + 10);
                     tile.y = RACK_Y;
+                    tile.rackIndex = i;
                 });
             }
             
@@ -469,15 +620,36 @@
                     return;
                 }
                 
-                // Check board tiles for removal
+                // Check board tiles
                 const boardX = Math.floor((x - BOARD_OFFSET_X) / TILE_SIZE);
                 const boardY = Math.floor((y - BOARD_OFFSET_Y) / TILE_SIZE);
                 
                 if (boardX >= 0 && boardX < BOARD_SIZE && boardY >= 0 && boardY < BOARD_SIZE) {
-                    const tile = this.board.removeTile(boardX, boardY);
-                    if (tile) {
-                        this.playerRack.push(tile);
-                        this.positionRackTiles();
+                    const tile = this.board.grid[boardY][boardX];
+                    if (tile && !tile.isPermanent) {
+                        // Deselect any previously selected tile
+                        if (this.selectedBoardTile) {
+                            this.selectedBoardTile.isSelected = false;
+                        }
+                        
+                        // Start dragging the board tile
+                        this.currentTile = tile;
+                        tile.isDragging = true;
+                        tile.isSelected = true;
+                        this.selectedBoardTile = tile;
+                        this.isDragging = true;
+                        this.dragSource = 'board';
+                        
+                        // Calculate drag offset
+                        const tileX = BOARD_OFFSET_X + boardX * TILE_SIZE;
+                        const tileY = BOARD_OFFSET_Y + boardY * TILE_SIZE;
+                        this.dragOffset.x = x - tileX;
+                        this.dragOffset.y = y - tileY;
+                        
+                        // Remove from board temporarily
+                        this.board.grid[boardY][boardX] = null;
+                        tile.boardPos = null;
+                        
                         this.soundManager.play('pickup');
                         return;
                     }
@@ -489,11 +661,18 @@
                         this.currentTile = tile;
                         tile.isDragging = true;
                         this.isDragging = true;
+                        this.dragSource = 'rack';
                         this.dragOffset.x = x - tile.x;
                         this.dragOffset.y = y - tile.y;
                         this.soundManager.play('pickup');
                         return;
                     }
+                }
+                
+                // Click on empty space - deselect
+                if (this.selectedBoardTile) {
+                    this.selectedBoardTile.isSelected = false;
+                    this.selectedBoardTile = null;
                 }
             }
             
@@ -520,27 +699,117 @@
                     
                     if (boardX >= 0 && boardX < BOARD_SIZE && boardY >= 0 && boardY < BOARD_SIZE) {
                         if (this.board.placeTile(this.currentTile, boardX, boardY)) {
-                            // Successfully placed
-                            const index = this.playerRack.indexOf(this.currentTile);
-                            if (index > -1) {
-                                this.playerRack.splice(index, 1);
+                            // Successfully placed on board
+                            if (this.dragSource === 'rack') {
+                                // Remove from rack
+                                const index = this.playerRack.indexOf(this.currentTile);
+                                if (index > -1) {
+                                    this.playerRack.splice(index, 1);
+                                    this.reindexRack();
+                                }
                             }
-                            this.positionRackTiles();
                             this.soundManager.play('place');
+                            this.updateTurnScore();
                         } else {
-                            // Failed to place
-                            this.positionRackTiles();
+                            // Failed to place - return to original position
+                            if (this.dragSource === 'board' && this.selectedBoardTile) {
+                                // Find an empty spot near the original position
+                                let placed = false;
+                                for (let dy = -1; dy <= 1 && !placed; dy++) {
+                                    for (let dx = -1; dx <= 1 && !placed; dx++) {
+                                        const newX = boardX + dx;
+                                        const newY = boardY + dy;
+                                        if (newX >= 0 && newX < BOARD_SIZE && 
+                                            newY >= 0 && newY < BOARD_SIZE) {
+                                            if (this.board.placeTile(this.currentTile, newX, newY)) {
+                                                placed = true;
+                                                this.soundManager.play('place');
+                                            }
+                                        }
+                                    }
+                                }
+                                if (!placed) {
+                                    // Couldn't find a spot, return to rack
+                                    this.returnTileToRack(this.currentTile);
+                                }
+                            } else {
+                                this.positionRackTiles();
+                            }
                             this.soundManager.play('error');
                         }
                     } else {
-                        // Dropped outside board
-                        this.positionRackTiles();
+                        // Check if dropped on rack area
+                        if (y >= RACK_Y - 20 && y <= RACK_Y + TILE_SIZE + 20) {
+                            // Calculate which rack position
+                            const rackIndex = Math.floor((x - RACK_X + 25) / (TILE_SIZE + 10));
+                            
+                            if (this.dragSource === 'board') {
+                                // Moving from board to rack
+                                this.returnTileToRack(this.currentTile, rackIndex);
+                            } else {
+                                // Reordering within rack
+                                this.reorderRackTile(this.currentTile, rackIndex);
+                            }
+                            this.soundManager.play('place');
+                        } else {
+                            // Dropped outside valid areas
+                            if (this.dragSource === 'board') {
+                                // Return to rack if from board
+                                this.returnTileToRack(this.currentTile);
+                            } else {
+                                // Keep in rack if from rack
+                                this.positionRackTiles();
+                            }
+                        }
                     }
                     
+                    // Reset dragging state
                     this.currentTile.isDragging = false;
+                    this.currentTile.isSelected = false;
                     this.currentTile = null;
                     this.isDragging = false;
+                    this.dragSource = null;
+                    this.updateTurnScore();
                 }
+            }
+            
+            returnTileToRack(tile, preferredIndex = null) {
+                // Remove from temp tiles if it's there
+                const tempIndex = this.board.tempTiles.indexOf(tile);
+                if (tempIndex > -1) {
+                    this.board.tempTiles.splice(tempIndex, 1);
+                }
+                
+                tile.boardPos = null;
+                
+                if (preferredIndex !== null && preferredIndex >= 0 && preferredIndex <= this.playerRack.length) {
+                    // Insert at specific position
+                    this.playerRack.splice(preferredIndex, 0, tile);
+                } else {
+                    // Add to end
+                    this.playerRack.push(tile);
+                }
+                
+                this.reindexRack();
+                this.positionRackTiles();
+            }
+            
+            reorderRackTile(tile, newIndex) {
+                const currentIndex = this.playerRack.indexOf(tile);
+                if (currentIndex > -1 && newIndex >= 0 && newIndex < this.playerRack.length) {
+                    // Remove from current position
+                    this.playerRack.splice(currentIndex, 1);
+                    // Insert at new position
+                    this.playerRack.splice(newIndex, 0, tile);
+                    this.reindexRack();
+                }
+                this.positionRackTiles();
+            }
+            
+            reindexRack() {
+                this.playerRack.forEach((tile, index) => {
+                    tile.rackIndex = index;
+                });
             }
             
             checkButton(x, y, bx, by, bw, bh) {
@@ -552,6 +821,7 @@
                     const j = Math.floor(Math.random() * (i + 1));
                     [this.playerRack[i], this.playerRack[j]] = [this.playerRack[j], this.playerRack[i]];
                 }
+                this.reindexRack();
                 this.positionRackTiles();
             }
             
@@ -563,18 +833,23 @@
                         this.playerRack.push(tile);
                     }
                 });
+                this.reindexRack();
                 this.positionRackTiles();
+                this.updateTurnScore();
+            }
+            
+            updateTurnScore() {
+                this.turnScore = this.board.calculateTurnScore();
+                document.getElementById('turnScoreDisplay').textContent = this.turnScore;
             }
             
             endTurn() {
-                let turnScore = 0;
                 this.board.tempTiles.forEach(tile => {
                     tile.isPermanent = true;
-                    turnScore += tile.value;
                 });
                 
-                if (turnScore > 0) {
-                    this.score += turnScore;
+                if (this.turnScore > 0) {
+                    this.score += this.turnScore;
                     document.getElementById('scoreDisplay').textContent = this.score;
                     this.soundManager.play('end_turn');
                 } else {
@@ -582,6 +857,8 @@
                 }
                 
                 this.board.tempTiles = [];
+                this.turnScore = 0;
+                document.getElementById('turnScoreDisplay').textContent = '0';
                 this.fillRack();
             }
             
@@ -592,15 +869,20 @@
             }
             
             showHelp() {
-                alert('Palm Pilot Scrabble\n\n' +
-                      '• Drag tiles from rack to board\n' +
-                      '• Click yellow tiles to remove them\n' +
+                alert('Palm Pilot Scrabble - v2.0\n\n' +
+                      '• Drag tiles anywhere (rack ↔ board)\n' +
+                      '• Rearrange rack tiles by dragging\n' +
+                      '• Click & drag board tiles to move them\n' +
                       '• Press SPACE to recall all tiles\n' +
-                      '• Press ENTER to end turn\n' +
-                      '• Yellow tiles = temporary\n' +
-                      '• White tiles = permanent\n\n' +
-                      'Special squares multiply scores\n' +
-                      '(not implemented yet)');
+                      '• Press ENTER to end turn\n\n' +
+                      'Scoring:\n' +
+                      '• See turn score before confirming\n' +
+                      '• Special squares multiply scores\n' +
+                      '• 50 bonus points for using all 7 tiles\n\n' +
+                      'Tile colors:\n' +
+                      '• Yellow = temporary (this turn)\n' +
+                      '• White = permanent\n' +
+                      '• Gold border = selected');
             }
             
             draw() {
@@ -640,6 +922,12 @@
             }
             
             drawTile(tile) {
+                // Draw selection highlight
+                if (tile.isSelected) {
+                    this.ctx.fillStyle = COLORS.SELECTED;
+                    this.ctx.fillRect(tile.x - 2, tile.y - 2, TILE_SIZE + 4, TILE_SIZE + 4);
+                }
+                
                 this.ctx.fillStyle = COLORS.WHITE;
                 this.ctx.fillRect(tile.x, tile.y, TILE_SIZE, TILE_SIZE);
                 this.ctx.strokeStyle = COLORS.BLACK;
@@ -672,13 +960,22 @@
                 // Draw tiles remaining
                 this.ctx.fillText(`TILES LEFT: ${this.tileBag.length}`, 250, 30);
                 
-                // Draw temp tiles count
-                this.ctx.font = '14px Courier New';
-                this.ctx.fillText(`Tiles placed this turn: ${this.board.tempTiles.length}`, 450, 30);
+                // Draw turn score with emphasis if > 0
+                if (this.turnScore > 0) {
+                    this.ctx.fillStyle = COLORS.RED;
+                    this.ctx.font = 'bold 22px Courier New';
+                    this.ctx.fillText(`TURN: ${this.turnScore}`, 500, 30);
+                } else {
+                    this.ctx.fillStyle = COLORS.PALM_DARK;
+                    this.ctx.font = 'bold 20px Courier New';
+                    this.ctx.fillText(`TURN: ${this.turnScore}`, 500, 30);
+                }
                 
                 // Draw instructions
-                this.ctx.fillText('Drag tiles to/from board. SPACE: recall all, ENTER: end turn', 50, 860);
-                this.ctx.fillText('Yellow tiles = temporary (this turn), White = permanent', 50, 880);
+                this.ctx.fillStyle = COLORS.PALM_DARK;
+                this.ctx.font = '14px Courier New';
+                this.ctx.fillText('Drag tiles anywhere • SPACE: recall all • ENTER: end turn', 50, 860);
+                this.ctx.fillText('Yellow = temporary • White = permanent • Gold = selected', 50, 880);
                 
                 // Draw buttons
                 this.drawButton('SHUFFLE', 420, 800, 80, 30, COLORS.PALM_HIGHLIGHT);
